@@ -1,10 +1,10 @@
-CAPTION="a man <|image|> and a man <|image|> are reading book together"
-DEMO_NAME="newton_einstein"
+CAPTION="an APPL-Emoji of a man <|image|> wearing hat"
+DEMO_NAME="marco1"
 
-CUDA_VISIBLE_DEVICES=0 accelerate launch \
-    --mixed_precision=fp16 \
+accelerate launch \
+    --mixed_precision=no \
     fastcomposer/inference.py \
-    --pretrained_model_name_or_path runwayml/stable-diffusion-v1-5 \
+    --pretrained_model_name_or_path ./model/fastcomposer \
     --finetuned_model_path model/fastcomposer \
     --test_reference_folder data/${DEMO_NAME} \
     --test_caption "${CAPTION}" \
@@ -23,4 +23,5 @@ CUDA_VISIBLE_DEVICES=0 accelerate launch \
     --guidance_scale 5 \
     --inference_steps 50 \
     --start_merge_step 10 \
-    --no_object_augmentation
+    --no_object_augmentation \
+    --use_dreamtorch_unet

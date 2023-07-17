@@ -17,7 +17,7 @@ import torchvision.transforms as T
 import gc
 import numpy as np
 
-inference_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+inference_dtype = torch.float16 #torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
 
 class MLP(nn.Module):
@@ -54,10 +54,12 @@ class FastComposerCLIPImageEncoder(CLIPPreTrainedModel):
             (0.48145466, 0.4578275, 0.40821073),
             (0.26862954, 0.26130258, 0.27577711),
         )
+
         return FastComposerCLIPImageEncoder(
             vision_model,
             visual_projection,
             vision_processor,
+            model.config
         )
 
     def __init__(
@@ -65,12 +67,12 @@ class FastComposerCLIPImageEncoder(CLIPPreTrainedModel):
         vision_model,
         visual_projection,
         vision_processor,
+        config
     ):
-        super().__init__(vision_model.config)
+        super().__init__(config)
         self.vision_model = vision_model
         self.visual_projection = visual_projection
         self.vision_processor = vision_processor
-
         self.image_size = vision_model.config.image_size
 
     def forward(self, object_pixel_values):
@@ -146,7 +148,6 @@ def fuse_object_embeddings(
     )
 
     valid_object_embeds = flat_object_embeds[valid_object_mask.flatten()]
-
     inputs_embeds = inputs_embeds.view(-1, inputs_embeds.shape[-1])
     image_token_mask = image_token_mask.view(-1)
     valid_object_embeds = valid_object_embeds.view(-1, valid_object_embeds.shape[-1])
@@ -160,6 +161,39 @@ def fuse_object_embeddings(
     return inputs_embeds
 
 
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin
+
+class FastComposerPostfuseModule(ModelMixin, ConfigMixin):
+    @register_to_config
+    def __init__(self, embed_dim: int):
+        super().__init__()
+        self.mlp1 = MLP(embed_dim * 2, embed_dim, embed_dim, use_residual=False)
+        self.mlp2 = MLP(embed_dim, embed_dim, embed_dim, use_residual=True)
+        self.layer_norm = nn.LayerNorm(embed_dim)
+
+    def fuse_fn(self, text_embeds, object_embeds):
+        text_object_embeds = torch.cat([text_embeds, object_embeds], dim=-1)
+        text_object_embeds = self.mlp1(text_object_embeds) + text_embeds
+        text_object_embeds = self.mlp2(text_object_embeds)
+        text_object_embeds = self.layer_norm(text_object_embeds)
+        return text_object_embeds
+
+    def forward(
+        self,
+        text_embeds,
+        object_embeds,
+        image_token_mask,
+        num_objects,
+    ) -> torch.Tensor:
+        text_object_embeds = fuse_object_embeddings(
+            text_embeds, image_token_mask, object_embeds, num_objects, self.fuse_fn
+        )
+
+        return text_object_embeds
+
+
+'''
 class FastComposerPostfuseModule(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -186,6 +220,7 @@ class FastComposerPostfuseModule(nn.Module):
         )
 
         return text_object_embeds
+'''
 
 
 class FastComposerTextEncoder(CLIPPreTrainedModel):
@@ -457,7 +492,12 @@ class FastComposerModel(nn.Module):
 
     @staticmethod
     def from_pretrained(args):
-        text_encoder = FastComposerTextEncoder.from_pretrained(
+        # text_encoder = FastComposerTextEncoder.from_pretrained(
+        #     args.pretrained_model_name_or_path,
+        #     subfolder="text_encoder",
+        #     revision=args.revision,
+        # )
+        text_encoder = CLIPTextModel.from_pretrained(
             args.pretrained_model_name_or_path,
             subfolder="text_encoder",
             revision=args.revision,

@@ -22,6 +22,7 @@ import os
 @torch.no_grad()
 def main():
     args = parse_args()
+    args.mixed_precision = None
     accelerator = Accelerator(
         mixed_precision=args.mixed_precision,
     )
@@ -51,12 +52,13 @@ def main():
     ckpt_name = "pytorch_model.bin"
 
     model.load_state_dict(
-        torch.load(Path(args.finetuned_model_path) / ckpt_name, map_location="cpu")
+        torch.load(Path(args.finetuned_model_path) / ckpt_name, map_location="cpu"), strict = False
     )
 
     model = model.to(device=accelerator.device, dtype=weight_dtype)
 
-    pipe.unet = model.unet
+    if not args.use_dreamtorch_unet:
+        pipe.unet = model.unet
 
     if args.enable_xformers_memory_efficient_attention:
         pipe.unet.enable_xformers_memory_efficient_attention()
@@ -80,6 +82,12 @@ def main():
         subfolder="tokenizer",
         revision=args.revision,
     )
+
+    if args.save_pretrained:
+        pipe.save_pretrained(save_directory=args.save_directory)
+        return
+    # pipe.text_encoder.save_pretrained(save_directory="/Users/jingwenzhu/projects/fastcomposer/model/fastcomposer/text_encoder")
+    # pipe.image_encoder.save_pretrained(save_directory="/Users/jingwenzhu/projects/fastcomposer/model/fastcomposer/clip_image_encoder")
 
     object_transforms = get_object_transforms(args)
 
@@ -128,7 +136,7 @@ def main():
         object_embeds = None
 
     encoder_hidden_states = pipe.text_encoder(
-        input_ids, image_token_mask, object_embeds, num_objects
+        input_ids
     )[0]
 
     encoder_hidden_states_text_only = pipe._encode_prompt(
