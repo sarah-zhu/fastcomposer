@@ -22,11 +22,11 @@ import os
 @torch.no_grad()
 def main():
     args = parse_args()
-    args.mixed_precision = None
     accelerator = Accelerator(
         mixed_precision=args.mixed_precision,
     )
-
+    print("mixed_precision", accelerator.mixed_precision)
+    print("accelerator device: ", accelerator.device)
     # Handle the repository creation
     if accelerator.is_main_process:
         if args.output_dir is not None:
@@ -54,7 +54,7 @@ def main():
     model.load_state_dict(
         torch.load(Path(args.finetuned_model_path) / ckpt_name, map_location="cpu"), strict = False
     )
-
+    
     model = model.to(device=accelerator.device, dtype=weight_dtype)
 
     if not args.use_dreamtorch_unet:

@@ -310,7 +310,7 @@ def parse_args(default=False):
 
     # inference specific arguments
     parser.add_argument("--inference_steps", type=int, default=50)
-    parser.add_argument("--guidance_scale", type=int, default=5)
+    parser.add_argument("--guidance_scale", type=float, default=5)
     parser.add_argument("--num_images_per_prompt", type=int, default=1)
     parser.add_argument("--evaluation_batch_size", type=int, default=4)
     parser.add_argument("--finetuned_model_path", type=str)
