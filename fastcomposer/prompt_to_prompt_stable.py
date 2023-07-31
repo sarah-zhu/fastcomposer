@@ -10,7 +10,7 @@ import fastcomposer.ptp_utils as ptp_utils
 import fastcomposer.seq_aligner as seq_aligner
 
 MY_TOKEN = '<replace with your token>'
-LOW_RESOURCE = False
+LOW_RESOURCE = True
 NUM_DIFFUSION_STEPS = 50
 GUIDANCE_SCALE = 7.5
 MAX_NUM_WORDS = 77
@@ -301,13 +301,13 @@ def run_and_display(pipe, prompts, controller, latent=None, run_baseline=False, 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", type=str, default="A painting of a squirrel eating a burger")
-    parser.add_argument("--prompt-updated", type=str, default="A painting of a lion eating a burger")
+    parser.add_argument("--prompt", type=str, default="an emoji style man wearing glasses")
+    parser.add_argument("--prompt-updated", type=str, default="an emoji style man wearing hat")
     parser.add_argument("--replacement", action="store_true")
     parser.add_argument("--refinement", action="store_true")
     parser.add_argument("--re-weight", action="store_true")
     parser.add_argument("--show-attention-map", action="store_true")
-    parser.add_argument("--seed", type=int, default=42, help="A seed random generation")
+    parser.add_argument("--seed", type=int, default=8888, help="A seed random generation")
     args = parser.parse_args()
 
 
@@ -316,13 +316,20 @@ def main():
 
 
     controller = AttentionStore()
-    image, x_t = run_and_display(pipe, prompts, controller, latent=None, run_baseline=False, generator=g_cpu)
+    image, x_t = run_and_display(pipe, [prompts[0]], controller, latent=None, run_baseline=False, generator=g_cpu)
     if args.show_attention_map:
         show_cross_attention(tokenizer, prompts, controller, res=16, from_where=("up", "down"))
 
     if args.replacement:
-        controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=0.4)
-        _ = run_and_display(pipe, prompts, controller, latent=x_t, run_baseline=True)
+        # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=0.4)
+        # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lion": .4},
+        #                               self_replace_steps=0.4)
+        # lb = LocalBlend(prompts, ("squirrel", "lion"))
+        # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lion": .4},
+        #                               self_replace_steps=0.4, local_blend=lb)
+        controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "hat": .4},
+                                     self_replace_steps=.4)
+        _ = run_and_display(pipe, prompts, controller, latent=x_t, run_baseline=False)
 
 
 if __name__ == "__main__":

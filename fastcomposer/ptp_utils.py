@@ -58,6 +58,10 @@ def view_images(images, num_rows=1, offset_ratio=0.02):
                 i * num_cols + j]
 
     pil_img = Image.fromarray(image_)
+    import os, random
+    img_path = f'./outputs/test_{random.randrange(0, 101)}.jpg'
+    print("save image: ", os.path.abspath(img_path))
+    pil_img.save(img_path)
     plt.imshow(pil_img)
     plt.show()
 
