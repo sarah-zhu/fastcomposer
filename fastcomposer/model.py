@@ -563,7 +563,7 @@ class FastComposerModel(nn.Module):
         object_embeds = self.image_encoder(object_pixel_values)
 
         encoder_hidden_states = self.text_encoder(
-            input_ids, image_token_mask, object_embeds, num_objects
+            input_ids
         )[
             0
         ]  # (bsz, seq_len, dim)

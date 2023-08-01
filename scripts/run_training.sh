@@ -1,8 +1,8 @@
 export WANDB_NAME=postfuse-localize-ffhq-1_5-1e-5
 export WANDB_DISABLE_SERVICE=true
-export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+export CUDA_VISIBLE_DEVICES="0"
 
-DATASET_PATH="data/ffhq_wild_files"
+DATASET_PATH="../data/ffhq_wild_files"
 
 DATASET_NAME="ffhq"
 FAMILY=runwayml
@@ -14,7 +14,7 @@ accelerate launch \
     --machine_rank 0 \
     --num_machines 1 \
     --main_process_port 11135 \
-    --num_processes 8 \
+    --num_processes 1 \
     --multi_gpu \
     fastcomposer/train.py \
     --pretrained_model_name_or_path ${FAMILY}/${MODEL} \
@@ -23,7 +23,7 @@ accelerate launch \
     --output_dir models/${MODEL}/${DATASET_NAME}/${WANDB_NAME} \
     --max_train_steps 150000 \
     --num_train_epochs 150000 \
-    --train_batch_size 16 \
+    --train_batch_size 1 \
     --learning_rate 1e-5 \
     --unet_lr_scale 1.0 \
     --checkpointing_steps 200 \
