@@ -96,7 +96,7 @@ class StableDiffusionFastCompposerPipeline(StableDiffusionPipeline):
         # augment the text embedding 
         input_ids, image_token_mask = self._tokenize_and_mask_noun_phrases_ends(prompt)
         input_ids, image_token_mask = input_ids.to(device), image_token_mask.to(device)
-
+        print("image_token_mask: ", image_token_mask)
         num_objects = image_token_mask.sum(dim=1) 
 
         augmented_prompt_embeds = self.postfuse_module(

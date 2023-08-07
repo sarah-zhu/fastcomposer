@@ -47,34 +47,45 @@ def main():
         args.pretrained_model_name_or_path, torch_dtype=weight_dtype
     )
 
-    model = FastComposerModel.from_pretrained(args)
+    if args.finetuned_model_path:
+        model = FastComposerModel.from_pretrained(args)
+        ckpt_name = "pytorch_model.bin"
+        model.load_state_dict(
+            torch.load(Path(args.finetuned_model_path) / ckpt_name, map_location="cpu"), strict = False
+        )
+        model = model.to(device=accelerator.device, dtype=weight_dtype)
 
-    ckpt_name = "pytorch_model.bin"
+        if not args.use_dreamtorch_unet:
+            pipe.unet = model.unet
 
-    model.load_state_dict(
-        torch.load(Path(args.finetuned_model_path) / ckpt_name, map_location="cpu"), strict = False
-    )
-    
-    model = model.to(device=accelerator.device, dtype=weight_dtype)
+        pipe.text_encoder = model.text_encoder
+        pipe.image_encoder = model.image_encoder
+        pipe.postfuse_module = model.postfuse_module
+        del model
 
-    if not args.use_dreamtorch_unet:
-        pipe.unet = model.unet
+    if not hasattr(pipe, "image_encoder"):
+        from fastcomposer.model import FastComposerCLIPImageEncoder
+        pipe.image_encoder = FastComposerCLIPImageEncoder.from_pretrained(
+            args.pretrained_model_name_or_path + "/clip_image_encoder"
+        )
+        pipe.image_encoder.to(accelerator.device)
+
+    if not hasattr(pipe, "postfuse_module"):
+        from fastcomposer.model import FastComposerPostfuseModule
+        pipe.postfuse_module = FastComposerPostfuseModule.from_pretrained(
+            args.pretrained_model_name_or_path,
+            subfolder="fuse"
+        )
+        pipe.postfuse_module.to(accelerator.device)
+
+    pipe = pipe.to(accelerator.device)
 
     if args.enable_xformers_memory_efficient_attention:
         pipe.unet.enable_xformers_memory_efficient_attention()
 
-    pipe.text_encoder = model.text_encoder
-    pipe.image_encoder = model.image_encoder
-
-    pipe.postfuse_module = model.postfuse_module
-
     pipe.inference = types.MethodType(
         stable_diffusion_call_with_references_delayed_conditioning, pipe
     )
-
-    del model
-
-    pipe = pipe.to(accelerator.device)
 
     # Set up the dataset
     tokenizer = CLIPTokenizer.from_pretrained(

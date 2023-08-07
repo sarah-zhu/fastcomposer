@@ -163,3 +163,8 @@ cython_debug/
 #.idea/
 
 *.swp
+
+
+# output
+outputs
+*.DS_Store
