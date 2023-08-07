@@ -153,6 +153,7 @@ def text2image_ldm_stable(
         truncation=True,
         return_tensors="pt",
     )
+
     text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
     max_length = text_input.input_ids.shape[-1]
     uncond_input = model.tokenizer(
@@ -168,13 +169,128 @@ def text2image_ldm_stable(
     # set timesteps
     extra_set_kwargs = {} #{"steps_offset": 1}
     model.scheduler.set_timesteps(num_inference_steps, **extra_set_kwargs)
-    for t in tqdm(model.scheduler.timesteps):
+    for i, t in enumerate(model.scheduler.timesteps):
+        print("step: ", i)
         latents = diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource)
 
     image = latent2image(model.vae, latents)
-
     return image, latent
 
+
+'''
+@torch.no_grad()
+def text2image_fastcomposer(
+        model,
+        prompt: List[str],
+        reference_subject_images: List[Image.Image],
+        controller,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        generator: Optional[torch.Generator] = None,
+        latent: Optional[torch.FloatTensor] = None,
+        low_resource: bool = False,
+):
+    register_attention_control(model, controller)
+    height = width = 512
+    batch_size = len(prompt)
+
+    text_input = model.tokenizer(
+        [prompt_.replace("<|image|>", "") for prompt_ in prompt],
+        padding="max_length",
+        max_length=model.tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    )
+    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+    print("text_embeddings: ", text_embeddings.shape)
+
+    augmented_text_embeddings = model._encode_augmented_prompt(prompt[0], reference_subject_images, model.device,  text_embeddings.dtype)
+    augmented_text_embeddings = augmented_text_embeddings.repeat(1, 1, 1)
+    print("augmented_text_embeddings: ", augmented_text_embeddings.shape)
+
+
+    max_length = text_input.input_ids.shape[-1]
+    uncond_input = model.tokenizer(
+        [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
+    )
+    uncond_embeddings = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
+    print("uncond_embeddings: ", uncond_embeddings.shape)
+
+    context = [uncond_embeddings, text_embeddings]
+    augmented_context = [uncond_embeddings, augmented_text_embeddings]
+    if not low_resource:
+        context = torch.cat(context)
+        augmented_context = torch.cat(augmented_context)
+    latent, latents = init_latent(latent, model, height, width, generator, batch_size)
+
+    # set timesteps
+    extra_set_kwargs = {} #{"steps_offset": 1}
+    model.scheduler.set_timesteps(num_inference_steps, **extra_set_kwargs)
+    for i, t in enumerate(model.scheduler.timesteps):
+        print("step: ", i)
+        if i < 0:
+            latents = diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource)
+        else:
+            latents = diffusion_step(model, controller, latents, augmented_context, t, guidance_scale, low_resource)
+
+    image = latent2image(model.vae, latents)
+    return image, latent
+'''
+
+@torch.no_grad()
+def text2image_fastcomposer(
+        model,
+        prompt: List[str],
+        reference_subject_images: List[Image.Image],
+        controller,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 7.5,
+        generator: Optional[torch.Generator] = None,
+        latent: Optional[torch.FloatTensor] = None,
+        low_resource: bool = False,
+):
+    register_attention_control(model, controller)
+    height = width = 512
+    batch_size = len(prompt)
+
+    text_input = model.tokenizer(
+        [prompt[0]],
+        padding="max_length",
+        max_length=model.tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    )
+    text_embeddings = model.text_encoder(text_input.input_ids.to(model.device))[0]
+
+
+    augmented_text_embeddings = model._encode_augmented_prompt(prompt[1].replace("<|image|>", "man <|image|>"), reference_subject_images, model.device,  text_embeddings.dtype)
+    augmented_text_embeddings = augmented_text_embeddings.repeat(1, 1, 1)
+
+    text_embeddings = torch.cat([text_embeddings, augmented_text_embeddings])
+    print("text_embeddings: ", text_embeddings.shape)
+
+    max_length = text_input.input_ids.shape[-1]
+    uncond_input = model.tokenizer(
+        [""] * batch_size, padding="max_length", max_length=max_length, return_tensors="pt"
+    )
+    uncond_embeddings = model.text_encoder(uncond_input.input_ids.to(model.device))[0]
+    print("uncond_embeddings: ", uncond_embeddings.shape)
+
+    context = [uncond_embeddings, text_embeddings]
+    if not low_resource:
+        context = torch.cat(context)
+    latent, latents = init_latent(latent, model, height, width, generator, batch_size)
+
+    # set timesteps
+    extra_set_kwargs = {} #{"steps_offset": 1}
+    model.scheduler.set_timesteps(num_inference_steps, **extra_set_kwargs)
+    for i, t in enumerate(model.scheduler.timesteps):
+        print("step: ", i)
+        latents = diffusion_step(model, controller, latents, context, t, guidance_scale, low_resource)
+
+    image = latent2image(model.vae, latents)
+    print("image: ", image.shape)
+    return image, latent
 
 def register_attention_control(model, controller):
     def ca_forward(self, place_in_unet):
@@ -216,8 +332,6 @@ def register_attention_control(model, controller):
             return to_out(out)
 
         return forward
-
-
 
     class DummyController:
 

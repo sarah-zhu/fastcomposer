@@ -3,6 +3,7 @@ from PIL import Image
 import torch
 from diffusers import StableDiffusionPipeline
 import torch.nn.functional as nnf
+from accelerate.utils import set_seed
 import numpy as np
 import abc, argparse
 from accelerate import Accelerator
@@ -10,7 +11,7 @@ import fastcomposer.ptp_utils as ptp_utils
 import fastcomposer.seq_aligner as seq_aligner
 
 MY_TOKEN = '<replace with your token>'
-LOW_RESOURCE = True
+LOW_RESOURCE = False
 NUM_DIFFUSION_STEPS = 50
 GUIDANCE_SCALE = 7.5
 MAX_NUM_WORDS = 77
@@ -173,7 +174,6 @@ class AttentionControlEdit(AttentionStore, abc.ABC):
         self.batch_size = len(prompts)
         self.cross_replace_alpha = ptp_utils.get_time_words_attention_alpha(prompts, num_steps, cross_replace_steps,
                                                                             tokenizer).to(device)
-
         if type(self_replace_steps) is float:
             self_replace_steps = 0, self_replace_steps
         self.num_self_replace = int(num_steps * self_replace_steps[0]), int(num_steps * self_replace_steps[1])
@@ -249,6 +249,7 @@ def aggregate_attention(prompts, attention_store: AttentionStore, res: int, from
 
 
 def show_cross_attention(tokenizer, prompts, attention_store: AttentionStore, res: int, from_where: List[str], select: int = 0):
+    prompts = [prompt.replace("<|image|>", "") for prompt in prompts]
     tokens = tokenizer.encode(prompts[select])
     decoder = tokenizer.decode
     attention_maps = aggregate_attention(prompts, attention_store, res, from_where, True, select)
@@ -281,55 +282,129 @@ def show_self_attention_comp(attention_store: AttentionStore, res: int, from_whe
     ptp_utils.view_images(np.concatenate(images, axis=1))
 
 
-def run_and_display(pipe, prompts, controller, latent=None, run_baseline=False, generator=None):
+def run_and_display(pipe, prompts, controller, latent=None, run_baseline=False, generator=None, pipeline_type="stable_diffusion", image_path=None):
     if run_baseline:
         print("w.o. prompt-to-prompt")
         images, latent = run_and_display(pipe, prompts, EmptyControl(), latent=latent, run_baseline=False,
                                          generator=generator)
         print("with prompt-to-prompt")
-    images, x_t = ptp_utils.text2image_ldm_stable(pipe, prompts, controller, latent=latent,
-                                                  num_inference_steps=NUM_DIFFUSION_STEPS,
-                                                  guidance_scale=GUIDANCE_SCALE, generator=generator,
-                                                  low_resource=LOW_RESOURCE)
+    if pipeline_type == "stable_diffusion":
+        images, x_t = ptp_utils.text2image_ldm_stable(pipe, prompts, controller, latent=latent,
+                                                      num_inference_steps=NUM_DIFFUSION_STEPS,
+                                                      guidance_scale=GUIDANCE_SCALE, generator=generator,
+                                                      low_resource=LOW_RESOURCE)
+    elif pipeline_type == "fastcomposer":
+        images, x_t = ptp_utils.text2image_fastcomposer(pipe, prompts, [Image.open(image_path)], controller, latent=latent,
+                                                      num_inference_steps=NUM_DIFFUSION_STEPS,
+                                                      guidance_scale=GUIDANCE_SCALE, generator=generator,
+                                                      low_resource=LOW_RESOURCE)
+    else:
+        NotImplementedError
     ptp_utils.view_images(images)
     return images, x_t
 
 
 
+def get_object_transforms(object_resolution):
+    from fastcomposer.transforms import PadToSquare
+    from torchvision import transforms as T
+    from collections import OrderedDict
+    object_transforms = torch.nn.Sequential(
+        OrderedDict(
+            [
+                ("pad_to_square", PadToSquare(fill=0, padding_mode="constant")),
+                (
+                    "resize",
+                    T.Resize(
+                        (object_resolution, object_resolution),
+                        interpolation=T.InterpolationMode.BILINEAR,
+                        antialias=True,
+                    ),
+                ),
+                ("convert_to_float", T.ConvertImageDtype(torch.float32)),
+            ]
+        )
+    )
+    return object_transforms
 
+
+def get_fastcomposer_pipeline(args):
+    from fastcomposer.model import FastComposerCLIPImageEncoder, FastComposerPostfuseModule
+    from fastcomposer.pipeline import StableDiffusionFastCompposerPipeline
+
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+    else:
+        weight_dtype = torch.float32
+
+    pipe = StableDiffusionFastCompposerPipeline.from_pretrained(
+        args.pretrained_model_name_or_path, torch_dtype=weight_dtype
+    ).to(device)
+
+    pipe.image_encoder = FastComposerCLIPImageEncoder.from_pretrained(
+        args.pretrained_model_name_or_path + "/clip_image_encoder"
+    )
+    pipe.postfuse_module = FastComposerPostfuseModule.from_pretrained(
+        args.pretrained_model_name_or_path,
+        subfolder="fuse"
+    )
+    pipe.image_encoder.to(device)
+    pipe.postfuse_module.to(device)
+    pipe.object_transforms = get_object_transforms(object_resolution=224)
+
+    tokenizer.add_tokens(["<|image|>"], special_tokens=True)
+    pipe.image_token_id = tokenizer.convert_tokens_to_ids("<|image|>")
+    pipe.special_tokenizer = tokenizer
+    return pipe
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompt", type=str, default="an emoji style man wearing glasses")
-    parser.add_argument("--prompt-updated", type=str, default="an emoji style man wearing hat")
+    parser.add_argument("--prompt", type=str, default="A painting of a squirrel eating a burger")
+    parser.add_argument("--prompt-updated", type=str, default="A painting of a lion eating a burger")
     parser.add_argument("--replacement", action="store_true")
     parser.add_argument("--refinement", action="store_true")
     parser.add_argument("--re-weight", action="store_true")
     parser.add_argument("--show-attention-map", action="store_true")
     parser.add_argument("--seed", type=int, default=8888, help="A seed random generation")
+    parser.add_argument("--pretrained_model_name_or_path", type=str, default="")
+    parser.add_argument("--pipeline-type", type=str, default="stable_diffusion")
+    parser.add_argument("--image", type=str, default="")
     args = parser.parse_args()
 
+    print("**** accelerator device: ", device)
+    print("**** accelerator mixed_precision: ", accelerator.mixed_precision)
+
+    set_seed(args.seed)
+
+    global pipe
+    if args.pipeline_type == 'fastcomposer' and args.pretrained_model_name_or_path:
+        pipe = get_fastcomposer_pipeline(args)
 
     g_cpu = torch.Generator().manual_seed(args.seed)
     prompts = [args.prompt, args.prompt_updated]
 
 
-    controller = AttentionStore()
-    image, x_t = run_and_display(pipe, [prompts[0]], controller, latent=None, run_baseline=False, generator=g_cpu)
     if args.show_attention_map:
-        show_cross_attention(tokenizer, prompts, controller, res=16, from_where=("up", "down"))
+        controller = AttentionStore()
+        image, x_t = run_and_display(pipe, [prompts[0]], controller, latent=None, run_baseline=False, pipeline_type=args.pipeline_type, image_path=args.image)
+        show_cross_attention(tokenizer, [prompts[0]], controller, res=16, from_where=("up", "down"))
+
+    x_t = torch.randn((1, pipe.unet.in_channels, 512 // 8, 512 // 8)).to(device)
+
 
     if args.replacement:
-        # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps=.8, self_replace_steps=0.4)
+        controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 0.3, "<|image|>": 0.08}, self_replace_steps=0.1)
         # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lion": .4},
         #                               self_replace_steps=0.4)
         # lb = LocalBlend(prompts, ("squirrel", "lion"))
         # controller = AttentionReplace(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "lion": .4},
         #                               self_replace_steps=0.4, local_blend=lb)
-        controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "hat": .4},
-                                     self_replace_steps=.4)
-        _ = run_and_display(pipe, prompts, controller, latent=x_t, run_baseline=False)
+        # controller = AttentionRefine(prompts, NUM_DIFFUSION_STEPS, cross_replace_steps={"default_": 1., "hat": .4},
+        #                              self_replace_steps=.4)
+        _ = run_and_display(pipe, prompts, controller, latent=x_t, run_baseline=False, pipeline_type=args.pipeline_type, image_path=args.image)
 
 
 if __name__ == "__main__":
