@@ -138,6 +138,7 @@ def fuse_object_embeddings(
 
     batch_size, max_num_objects = object_embeds.shape[:2]
     seq_length = inputs_embeds.shape[1]
+    hidden_dim = inputs_embeds.shape[-1]
     flat_object_embeds = object_embeds.view(
         -1, object_embeds.shape[-2], object_embeds.shape[-1]
     )
@@ -154,11 +155,16 @@ def fuse_object_embeddings(
 
     # slice out the image token embeddings
     image_token_embeds = inputs_embeds[image_token_mask]
-    valid_object_embeds = fuse_fn(image_token_embeds, valid_object_embeds)
-
-    inputs_embeds.masked_scatter_(image_token_mask[:, None], valid_object_embeds)
-    inputs_embeds = inputs_embeds.view(batch_size, seq_length, -1)
-    return inputs_embeds
+    if image_token_embeds.shape[0] == 0:
+        return inputs_embeds.view(batch_size, seq_length, -1)
+    else:
+        valid_object_embeds = fuse_fn(image_token_embeds, valid_object_embeds)
+        # inputs_embeds.masked_scatter_(image_token_mask[:, None], valid_object_embeds)
+        # inputs_embeds = inputs_embeds.view(batch_size, seq_length, -1)
+        image_token_mask = image_token_mask.view((seq_length*batch_size, 1)).repeat(1, hidden_dim)
+        inputs_embeds[image_token_mask] = valid_object_embeds.view(inputs_embeds[image_token_mask].shape)
+        return inputs_embeds.view(batch_size, seq_length, -1)
+  
 
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
