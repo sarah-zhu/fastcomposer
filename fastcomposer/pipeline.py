@@ -443,16 +443,21 @@ def stable_diffusion_call_with_references_delayed_conditioning(
 
     # 5. Prepare latent variables
     num_channels_latents = self.unet.in_channels
-    latents = self.prepare_latents(
-        batch_size * num_images_per_prompt,
-        num_channels_latents,
-        height,
-        width,
-        prompt_embeds.dtype,
-        device,
-        generator,
-        latents,
-    )
+    latents = np.random.randn(batch_size * num_images_per_prompt,
+                              num_channels_latents,
+                              height // self.vae_scale_factor,
+                              width // self.vae_scale_factor).astype(np.float32)
+    latents = torch.tensor(latents).to(device)
+    # latents = self.prepare_latents(
+    #     batch_size * num_images_per_prompt,
+    #     num_channels_latents,
+    #     height,
+    #     width,
+    #     prompt_embeds.dtype,
+    #     device,
+    #     generator,
+    #     latents,
+    # )
 
     extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
     (
